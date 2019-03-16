@@ -1,86 +1,123 @@
-const Post = {
-  id: 1,
-  posts: [
-    {
-      id: 1,
-      title: '제목',
-      body: '내용',
-    },
-  ],
-  create({ title, body }) {
-    this.id += 1;
-    const post = {
-      id: this.id,
-      title,
-      body,
-    };
+const Post = require('models/posts');
+const { ObjectId } = require('mongoose').Types;
+const Joi = require('joi');
 
-    this.posts.push(post);
+exports.checkObjectId = (ctx, next) => {
+  const { id } = ctx.params;
 
-    return post;
-  },
-  getPostIndex(id) {
-    // id로 posts index 조회
-    return this.posts.findIndex(post => post.id === id);
-  },
-  findPostById(id) {
-    // id로 host 조회
-    return this.posts.find(post => post.id === id);
-  },
-  removePostById(id) {
-    // id로 포스트 제거
-    // const index = this.getPostIndex(id);
-    // this.posts.splice(index, 1);
-    this.posts = this.posts.filter(post => post.id !== id);
-  },
-  updatePost(id, data, replace) {
-    // id로 포스트를 업데이트하거나 교체함.
-    const index = this.getPostIndex(id);
+  if (!ObjectId.isValid(id)) {
+    ctx.status = 400;
+    return null;
+  }
 
-    if (replace) {
-      this.posts[index] = {
-        ...data,
-        id,
-      };
-    } else {
-      this.posts[index] = {
-        ...this.posts[index],
-        ...data,
-        id,
-      };
+  return next();
+};
+
+exports.write = async (ctx) => {
+  const { title, body, tags } = ctx.request.body;
+
+  const scheme = Joi.object().keys({
+    title: Joi.string().required(),
+    body: Joi.string().required(),
+    tags: Joi.array().items(Joi.string()),
+  });
+
+  const result = Joi.validate(ctx.request.body, scheme);
+
+  if (result.error) {
+    ctx.status = 400;
+    ctx.body = result.error;
+
+    return;
+  }
+
+  const post = new Post({
+    title,
+    body,
+    tags,
+  });
+
+  try {
+    await post.save();
+    ctx.body = post;
+  } catch (e) {
+    ctx.throw(500, e);
+  }
+};
+exports.list = async (ctx) => {
+  const page = parseInt(ctx.query.page || 1, 10);
+
+  try {
+    const posts = await Post.find()
+      .sort({ id: -1 })
+      .limit(10)
+      .skip((page - 1) * 10)
+      .exec();
+
+    const postCounts = await Post.countDocuments().exec();
+
+    ctx.set('Last-page', Math.ceil(postCounts / 10));
+    ctx.body = posts;
+  } catch (e) {
+    ctx.throw(500, e);
+  }
+};
+exports.read = async (ctx) => {
+  const { id } = ctx.params;
+
+  try {
+    const post = await Post.findById(id).exec();
+
+    if (!post) {
+      ctx.status = 404;
+      return;
     }
 
-    return this.posts[index];
-  },
+    ctx.body = post;
+  } catch (e) {
+    ctx.throw(500, e);
+  }
 };
+exports.remove = async (ctx) => {
+  const { id } = ctx.params;
 
-exports.write = (ctx) => {
-  const post = Post.create(ctx.request.body);
-  ctx.body = post;
+  try {
+    await Post.findByIdAndRemove(id).exec();
+    ctx.status = 204;
+  } catch (e) {
+    ctx.throw(500, e);
+  }
 };
-exports.list = (ctx) => {
-  ctx.body = Post.posts;
-};
-exports.read = (ctx) => {
-  const id = parseInt(ctx.params.id, 10);
+exports.update = async (ctx) => {
+  const { id } = ctx.params;
 
-  ctx.body = Post.findPostById(id);
-};
-exports.remove = (ctx) => {
-  const id = parseInt(ctx.params.id, 10);
+  const scheme = Joi.object().keys({
+    title: Joi.string(),
+    body: Joi.string(),
+    tags: Joi.array().items(Joi.string()),
+  });
 
-  Post.removePostById(id);
-  ctx.status = 204;
-};
-exports.replace = (ctx) => {
-  const id = parseInt(ctx.params.id, 10);
-  const post = Post.updatePost(id, ctx.request.body, true);
+  const result = Joi.validate(ctx.request.body, scheme);
 
-  ctx.body = post;
-};
-exports.update = (ctx) => {
-  const id = parseInt(ctx.params.id, 10);
-  const post = Post.updatePost(id, ctx.request.body, false);
+  if (result.error) {
+    ctx.status = 400;
+    ctx.body = result.error;
 
-  ctx.body = post;
+    return;
+  }
+
+  try {
+    const post = Post.findByIdAndUpdate(id, ctx.request.body, {
+      new: true,
+    }).exec();
+
+    if (!post) {
+      ctx.status = 204;
+      return;
+    }
+
+    ctx.body = post;
+  } catch (e) {
+    ctx.throw(500, e);
+  }
 };
